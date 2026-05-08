@@ -7,7 +7,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Tuple
 
-import cv2
 import numpy as np
 
 # COCO class ids (ultralytics yolov8n.pt)
@@ -29,6 +28,10 @@ def red_tail_ratio_in_bbox(
     bgr: np.ndarray, xyxy: Tuple[float, float, float, float]
 ) -> float:
     """후미 급정거 힌트: bbox 내 붉은 픽셀 비율 (단순 HSV)."""
+    # V2V 시나리오에서 V2V를 끄고 실행할 때(OpenCV 미설치)도 모듈 import가 깨지지 않도록
+    # cv2는 여기서 지연 import 한다.
+    import cv2
+
     x1, y1, x2, y2 = [int(round(v)) for v in xyxy]
     h, w = bgr.shape[:2]
     x1, y1 = max(0, x1), max(0, y1)
