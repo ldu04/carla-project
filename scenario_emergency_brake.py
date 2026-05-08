@@ -291,6 +291,8 @@ def run_scenario(params: ScenarioParams) -> ScenarioResult:
         photo_w = int(getattr(params, "photo_width", 1280))
         photo_h = int(getattr(params, "photo_height", 720))
         photo_fov = float(getattr(params, "photo_fov", CAMERA_FOV_DEG))
+        # 고화질 멀티캠은 렌더 부담이 크므로 sensor_tick으로 캡처 주기를 낮춰 server stall을 방지
+        photo_sensor_tick = float(getattr(params, "photo_sensor_tick", 0.2))
         want = list(getattr(params, "photo_cams", ["front", "driver", "top"]))
 
         def spawn_photo_cam(name: str, tf: Any) -> None:
@@ -298,6 +300,7 @@ def run_scenario(params: ScenarioParams) -> ScenarioResult:
             bp.set_attribute("image_size_x", str(photo_w))
             bp.set_attribute("image_size_y", str(photo_h))
             bp.set_attribute("fov", str(photo_fov))
+            bp.set_attribute("sensor_tick", str(photo_sensor_tick))
             buf = LatestCarlaImage()
             a = world.spawn_actor(bp, tf, attach_to=truck)
             a.listen(buf.set)
@@ -482,14 +485,20 @@ def run_scenario(params: ScenarioParams) -> ScenarioResult:
         return res
 
     finally:
-        settings.synchronous_mode = False
-        world.apply_settings(settings)
+        # 서버가 stall/timeout 상태이면 apply_settings도 timeout이 날 수 있어 보호
+        try:
+            settings.synchronous_mode = False
+            world.apply_settings(settings)
+        except RuntimeError:
+            pass
         if rgb_actor is not None:
             rgb_actor.destroy()
         if depth_actor is not None:
             depth_actor.destroy()
         for a in photo_actors:
             try:
+                # sensor는 stop 후 destroy (경고/잔존 방지)
+                a.stop()
                 a.destroy()
             except Exception:
                 pass
@@ -516,6 +525,7 @@ def main() -> None:
     p.add_argument("--photo-out-dir", type=str, default=os.path.join(LOG_DIR, "photos"))
     p.add_argument("--photo-width", type=int, default=1280)
     p.add_argument("--photo-height", type=int, default=720)
+    p.add_argument("--photo-sensor-tick", type=float, default=0.2)
     p.add_argument("--photo-cams", type=str, default="front,driver,top")
     args = p.parse_args()
 
@@ -532,6 +542,7 @@ def main() -> None:
     setattr(sp, "photo_out_dir", str(args.photo_out_dir))
     setattr(sp, "photo_width", int(args.photo_width))
     setattr(sp, "photo_height", int(args.photo_height))
+    setattr(sp, "photo_sensor_tick", float(args.photo_sensor_tick))
     cams = [c.strip() for c in str(args.photo_cams).split(",") if c.strip()]
     setattr(sp, "photo_cams", cams)
     setattr(sp, "photo_fov", float(CAMERA_FOV_DEG))
