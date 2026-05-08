@@ -87,13 +87,34 @@ class YoloRiskPipeline:
                     pass
         res = results[0]
         risks: List[DetectionRisk] = []
-        if res.boxes is None or len(res.boxes) == 0:
-            self._prev_vehicle_centers = []
-            return risks, res
+        # ultralytics 버전/환경에 따라 Results가 아니라 Tensor(N,6) 형태로 반환되는 경우가 있어
+        # (x1,y1,x2,y2,conf,cls) 형식으로 파싱을 지원한다.
+        if hasattr(res, "boxes"):
+            if res.boxes is None or len(res.boxes) == 0:
+                self._prev_vehicle_centers = []
+                return risks, res
+            xyxys = res.boxes.xyxy.cpu().numpy()
+            cls_ids = res.boxes.cls.cpu().numpy().astype(int)
+            scores = res.boxes.conf.cpu().numpy()
+        else:
+            try:
+                import torch
 
-        xyxys = res.boxes.xyxy.cpu().numpy()
-        cls_ids = res.boxes.cls.cpu().numpy().astype(int)
-        scores = res.boxes.conf.cpu().numpy()
+                if isinstance(res, torch.Tensor):
+                    det = res.detach().cpu().numpy()
+                else:
+                    det = np.asarray(res)
+            except Exception:
+                det = np.asarray(res)
+
+            if det.size == 0:
+                self._prev_vehicle_centers = []
+                return risks, res
+            if det.ndim != 2 or det.shape[1] < 6:
+                raise RuntimeError(f"Unexpected YOLO output shape: {det.shape}")
+            xyxys = det[:, 0:4]
+            scores = det[:, 4]
+            cls_ids = det[:, 5].astype(int)
 
         vehicle_centers: List[Tuple[float, float]] = []
         vehicle_rows: List[Tuple[Tuple[float, float, float, float], float, float, float]] = []

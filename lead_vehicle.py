@@ -35,12 +35,34 @@ def compute_lead_vehicle_metrics(
     (TTC, bbox 면적, xyxy). 없으면 (None, None, None).
     """
     res = yolo_result
-    if res is None or res.boxes is None or len(res.boxes) == 0:
+    if res is None:
         return None, None, None
 
     depth_m = depth_buffer_to_meters(depth_bgra)
-    xyxys = res.boxes.xyxy.cpu().numpy()
-    cls_ids = res.boxes.cls.cpu().numpy().astype(int)
+
+    # ultralytics Results 또는 Tensor(N,6: x1,y1,x2,y2,conf,cls) 모두 지원
+    if hasattr(res, "boxes"):
+        if res.boxes is None or len(res.boxes) == 0:
+            return None, None, None
+        xyxys = res.boxes.xyxy.cpu().numpy()
+        cls_ids = res.boxes.cls.cpu().numpy().astype(int)
+    else:
+        try:
+            import torch
+
+            if isinstance(res, torch.Tensor):
+                det = res.detach().cpu().numpy()
+            else:
+                det = np.asarray(res)
+        except Exception:
+            det = np.asarray(res)
+
+        if det.size == 0:
+            return None, None, None
+        if det.ndim != 2 or det.shape[1] < 6:
+            return None, None, None
+        xyxys = det[:, 0:4]
+        cls_ids = det[:, 5].astype(int)
 
     best_ttc = float("inf")
     best_area: Optional[float] = None
