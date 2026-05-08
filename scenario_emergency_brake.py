@@ -143,33 +143,69 @@ def run_scenario(params: ScenarioParams) -> ScenarioResult:
     world.apply_settings(settings)
 
     map_spawn = world.get_map().get_spawn_points()
-    spawn0 = map_spawn[12] if len(map_spawn) > 12 else map_spawn[0]
+    if not map_spawn:
+        raise RuntimeError("no spawn points in current CARLA map")
 
-    def spawn_vehicle(filter_substr: str, tf: Any) -> Any:
-        """
-        spawn_actor는 충돌 시 예외를 낼 수 있어 try_spawn_actor로 여러 번 시도.
-        """
-        bps = bp_lib.filter(filter_substr) or bp_lib.filter("vehicle.*")
-        bp = bps[0]
+    def _pick_blueprint(filters: List[str]) -> Any:
+        for f in filters:
+            bps = bp_lib.filter(f)
+            if bps:
+                return bps[0]
+        # 최후 폴백
+        return bp_lib.filter("vehicle.*")[0]
+
+    def _try_spawn_with_jitter(bp: Any, tf: Any) -> Optional[Any]:
         # 약간의 높이 오프셋으로 지면/프레임 충돌을 완화
         base_tf = carla.Transform(
-            carla.Location(tf.location.x, tf.location.y, tf.location.z + 0.5),
+            carla.Location(tf.location.x, tf.location.y, tf.location.z + 0.8),
             tf.rotation,
         )
-        for i in range(12):
-            jit = carla.Location(x=0.6 * (i % 3), y=0.6 * (i // 3), z=0.0)
+        for i in range(20):
+            jit = carla.Location(x=0.9 * (i % 4), y=0.9 * (i // 4), z=0.0)
             t2 = carla.Transform(base_tf.location + jit, base_tf.rotation)
             a = world.try_spawn_actor(bp, t2)
             if a is not None:
                 return a
-        raise RuntimeError(f"vehicle spawn failed: {filter_substr}")
+        return None
 
-    truck_tf = spawn0
-    truck = spawn_vehicle("vehicle.carlamotors.*", truck_tf)
-    obs_tf = _forward_offset_tf(truck_tf, params.obstacle_ahead_m, carla)
-    obstacle = spawn_vehicle("vehicle.tesla.model3", obs_tf)
-    sedan_tf = _forward_offset_tf(truck_tf, -params.headway_m, carla)
-    sedan = spawn_vehicle("vehicle.audi.*", sedan_tf)
+    def spawn_triplet() -> Tuple[Any, Any, Any, Any]:
+        """
+        (truck, obstacle, sedan, truck_tf) 를 스폰.
+        - 트럭은 'carlamotors'가 없을 수 있어 truck 계열 필터를 우선으로 후보화
+        - 스폰 포인트도 순회하며 충돌이 적은 지점을 찾는다
+        """
+        truck_bp = _pick_blueprint(
+            [
+                "vehicle.*truck*",
+                "vehicle.carlamotors.*",
+                "vehicle.*",
+            ]
+        )
+        obstacle_bp = _pick_blueprint(["vehicle.tesla.model3", "vehicle.*"])
+        sedan_bp = _pick_blueprint(["vehicle.audi.*", "vehicle.*"])
+
+        # 시작점 후보는 여러 개를 시도 (맵/교통 상황 따라 특정 포인트가 막힐 수 있음)
+        for idx in range(min(len(map_spawn), 24)):
+            base_tf = map_spawn[idx]
+            truck = _try_spawn_with_jitter(truck_bp, base_tf)
+            if truck is None:
+                continue
+            obs_tf = _forward_offset_tf(base_tf, params.obstacle_ahead_m, carla)
+            obstacle = _try_spawn_with_jitter(obstacle_bp, obs_tf)
+            if obstacle is None:
+                truck.destroy()
+                continue
+            sedan_tf = _forward_offset_tf(base_tf, -params.headway_m, carla)
+            sedan = _try_spawn_with_jitter(sedan_bp, sedan_tf)
+            if sedan is None:
+                obstacle.destroy()
+                truck.destroy()
+                continue
+            return truck, obstacle, sedan, base_tf
+
+        raise RuntimeError("vehicle spawn failed: could not place truck/obstacle/sedan")
+
+    truck, obstacle, sedan, truck_tf = spawn_triplet()
 
     speed_ms = params.initial_speed_kmh / 3.6
     # set_velocity()는 물리를 무시할 수 있으므로 사용하지 않고,
