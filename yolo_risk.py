@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from typing import List, Tuple
 
 import numpy as np
+import os
+import tempfile
 
 # COCO class ids (ultralytics yolov8n.pt)
 COCO_PERSON = 0
@@ -58,9 +60,31 @@ class YoloRiskPipeline:
         self._prev_vehicle_centers: List[Tuple[float, float]] = []
 
     def infer_frame(self, bgr: np.ndarray) -> Tuple[List[DetectionRisk], object]:
-        results = self.model.predict(
-            source=bgr, verbose=False, imgsz=640, conf=0.35
-        )
+        # 일부 ultralytics 버전(특히 Python 3.7 + 오래된 릴리즈)에서
+        # numpy array를 bool 컨텍스트로 평가하며 ValueError가 나는 케이스가 있어,
+        # 실패 시 임시 파일 경로로 폴백한다.
+        try:
+            results = self.model.predict(source=bgr, verbose=False, imgsz=640, conf=0.35)
+        except ValueError as exc:
+            msg = str(exc)
+            if "truth value of an array" not in msg and "ambiguous" not in msg:
+                raise
+            import cv2
+
+            fd, path = tempfile.mkstemp(prefix="v2v_yolo_", suffix=".jpg")
+            os.close(fd)
+            try:
+                ok, buf = cv2.imencode(".jpg", bgr)
+                if not ok:
+                    raise RuntimeError("cv2.imencode failed")
+                with open(path, "wb") as f:
+                    f.write(buf.tobytes())
+                results = self.model.predict(source=path, verbose=False, imgsz=640, conf=0.35)
+            finally:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
         res = results[0]
         risks: List[DetectionRisk] = []
         if res.boxes is None or len(res.boxes) == 0:
