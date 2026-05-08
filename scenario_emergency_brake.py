@@ -12,6 +12,7 @@ import json
 import math
 import os
 import socket
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -48,6 +49,60 @@ from v2v_logger import log_scenario_result, setup_logger
 from yolo_risk import YoloRiskPipeline
 
 logger = setup_logger("scenario")
+
+
+class LatestCarlaImage:
+    """센서 콜백에서 최신 carla.Image 1장만 보관."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._img: Any = None
+        self._frame: Optional[int] = None
+
+    def set(self, img: Any) -> None:
+        with self._lock:
+            self._img = img
+            self._frame = int(getattr(img, "frame", -1))
+
+    def get(self) -> Tuple[Any, Optional[int]]:
+        with self._lock:
+            return self._img, self._frame
+
+
+def _ensure_dir(p: str) -> None:
+    os.makedirs(p, exist_ok=True)
+
+
+def _save_image(img: Any, out_path: str) -> None:
+    """
+    carla.Image를 디스크로 저장.
+    기본은 PNG로 저장되며, offscreen에서도 동작한다.
+    """
+    # ColorConverter는 import carla 이후에만 접근 가능하므로 동적 참조
+    try:
+        import carla
+
+        img.save_to_disk(out_path, carla.ColorConverter.Raw)
+    except Exception:
+        # 최후 폴백(변환 실패 시): Raw 그대로 저장 시도
+        img.save_to_disk(out_path)
+
+
+def _capture_event_photos(
+    label: str,
+    sim_time: float,
+    out_dir: str,
+    cams: Dict[str, LatestCarlaImage],
+) -> None:
+    _ensure_dir(out_dir)
+    safe_label = "".join(c for c in label if c.isalnum() or c in ("-", "_"))
+    t_ms = int(round(sim_time * 1000.0))
+    for name, buf in cams.items():
+        img, frame = buf.get()
+        if img is None:
+            continue
+        fn = f"{t_ms:010d}_{safe_label}_{name}_frame{frame if frame is not None else -1}.png"
+        _save_image(img, os.path.join(out_dir, fn))
 
 
 @dataclass
@@ -219,10 +274,56 @@ def run_scenario(params: ScenarioParams) -> ScenarioResult:
     latest = LatestPair()
     rgb_actor = depth_actor = None
 
+    # 사진 캡처(옵션): important event 순간에만 저장
+    record_photos = bool(params.params.get("record_photos")) if isinstance(getattr(params, "params", None), dict) else False
+
     # 동기 모드에서는 벽시계 기반으로 rate-limit 하면 재현성이 깨질 수 있어
     # tick 기반으로 추론 주기를 결정한다.
     infer_every_n = max(1, int(round(1.0 / (max(YOLO_TARGET_HZ, 0.1) * params.fixed_delta_seconds))))
     infer_dt_s = infer_every_n * params.fixed_delta_seconds
+
+    # --- 이벤트 사진용 멀티캠 준비 ---
+    photo_cams: Dict[str, LatestCarlaImage] = {}
+    photo_actors: List[Any] = []
+    photo_out_dir: Optional[str] = None
+    if getattr(params, "record_photos", False):
+        photo_out_dir = str(getattr(params, "photo_out_dir", os.path.join(LOG_DIR, "photos")))
+        photo_w = int(getattr(params, "photo_width", 1280))
+        photo_h = int(getattr(params, "photo_height", 720))
+        photo_fov = float(getattr(params, "photo_fov", CAMERA_FOV_DEG))
+        want = list(getattr(params, "photo_cams", ["front", "driver", "top"]))
+
+        def spawn_photo_cam(name: str, tf: Any) -> None:
+            bp = bp_lib.find("sensor.camera.rgb")
+            bp.set_attribute("image_size_x", str(photo_w))
+            bp.set_attribute("image_size_y", str(photo_h))
+            bp.set_attribute("fov", str(photo_fov))
+            buf = LatestCarlaImage()
+            a = world.spawn_actor(bp, tf, attach_to=truck)
+            a.listen(buf.set)
+            photo_cams[name] = buf
+            photo_actors.append(a)
+
+        if "front" in want:
+            spawn_photo_cam(
+                "front",
+                carla.Transform(
+                    carla.Location(x=2.3, z=1.6), carla.Rotation(pitch=-8.0)
+                ),
+            )
+        if "driver" in want:
+            spawn_photo_cam(
+                "driver",
+                carla.Transform(carla.Location(x=0.4, z=1.3), carla.Rotation()),
+            )
+        if "top" in want:
+            spawn_photo_cam(
+                "top",
+                carla.Transform(
+                    carla.Location(x=-8.0, z=6.0),
+                    carla.Rotation(pitch=-20.0),
+                ),
+            )
 
     if params.v2v_enabled:
         udp_send_sock = make_udp_socket()
@@ -292,6 +393,8 @@ def run_scenario(params: ScenarioParams) -> ScenarioResult:
                 trigger_armed = True
                 obstacle_braking = True
                 logger.info("장애물 급제동 트리거 dist=%.2f", dist_to_obs)
+                if photo_out_dir and photo_cams:
+                    _capture_event_photos("trigger", sim_time, photo_out_dir, photo_cams)
 
             # 차량 제어는 tick마다 지속 적용 (apply_control 1회로는 다음 tick에 덮일 수 있음)
             if obstacle_braking:
@@ -329,6 +432,8 @@ def run_scenario(params: ScenarioParams) -> ScenarioResult:
                     )
                     if t_em is not None and first_emergency is None:
                         first_emergency = t_em
+                        if photo_out_dir and photo_cams:
+                            _capture_event_photos("detect", sim_time, photo_out_dir, photo_cams)
 
                 pkts = _drain_udp(recv_udp)
                 for p in pkts:
@@ -343,6 +448,8 @@ def run_scenario(params: ScenarioParams) -> ScenarioResult:
                 ):
                     first_rear_brake = sim_time
                     res.ttc_at_rear_brake_start = last_pkt_ttc_rear
+                    if photo_out_dir and photo_cams:
+                        _capture_event_photos("rear_brake", sim_time, photo_out_dir, photo_cams)
             else:
                 # V2V 미사용 시 뒤차도 목표 속도 유지
                 cur_s = _speed_ms(sedan)
@@ -358,7 +465,12 @@ def run_scenario(params: ScenarioParams) -> ScenarioResult:
                 obs_vel_before = math.sqrt(ov.x ** 2 + ov.y ** 2 + ov.z ** 2)
                 res.collision = True
                 res.delta_v_ms = abs(sedan_vel_before - obs_vel_before)
+                if photo_out_dir and photo_cams:
+                    _capture_event_photos("collision", sim_time, photo_out_dir, photo_cams)
                 break
+
+        if photo_out_dir and photo_cams:
+            _capture_event_photos("end", sim_time, photo_out_dir, photo_cams)
 
         # 결과 시간도 simulation time(초) 기준
         res.first_emergency_detect_wall_s = first_emergency
@@ -376,6 +488,11 @@ def run_scenario(params: ScenarioParams) -> ScenarioResult:
             rgb_actor.destroy()
         if depth_actor is not None:
             depth_actor.destroy()
+        for a in photo_actors:
+            try:
+                a.destroy()
+            except Exception:
+                pass
         if recv_udp is not None:
             recv_udp.close()
         if udp_send_sock is not None:
@@ -395,6 +512,11 @@ def main() -> None:
     p.add_argument("--obstacle-ahead-m", type=float, default=SCENARIO_OBSTACLE_AHEAD_M)
     p.add_argument("--v2v", type=int, default=1, help="1=V2V 파이프라인 포함")
     p.add_argument("--max-ticks", type=int, default=8000)
+    p.add_argument("--record-photos", type=int, default=0, help="1=중요 시점 사진 저장")
+    p.add_argument("--photo-out-dir", type=str, default=os.path.join(LOG_DIR, "photos"))
+    p.add_argument("--photo-width", type=int, default=1280)
+    p.add_argument("--photo-height", type=int, default=720)
+    p.add_argument("--photo-cams", type=str, default="front,driver,top")
     args = p.parse_args()
 
     sp = ScenarioParams(
@@ -405,6 +527,14 @@ def main() -> None:
         v2v_enabled=bool(args.v2v),
         max_ticks=args.max_ticks,
     )
+    # dataclass 확장 없이 런타임 속성으로 사진 옵션 전달
+    setattr(sp, "record_photos", bool(args.record_photos))
+    setattr(sp, "photo_out_dir", str(args.photo_out_dir))
+    setattr(sp, "photo_width", int(args.photo_width))
+    setattr(sp, "photo_height", int(args.photo_height))
+    cams = [c.strip() for c in str(args.photo_cams).split(",") if c.strip()]
+    setattr(sp, "photo_cams", cams)
+    setattr(sp, "photo_fov", float(CAMERA_FOV_DEG))
     out = run_scenario(sp)
     outp = os.path.join(LOG_DIR, "scenario_last_result.json")
     os.makedirs(LOG_DIR, exist_ok=True)
