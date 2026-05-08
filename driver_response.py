@@ -7,7 +7,14 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+try:
+    # Python 3.8+
+    from typing import Literal
+except ImportError:  # pragma: no cover
+    # Python 3.7
+    from typing_extensions import Literal
 
 Tier = Literal["critical", "warning", "info"]
 
