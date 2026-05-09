@@ -1,0 +1,37 @@
+CARLA VM — 끊김 대비 빠른 재개 (요약)
+================================
+
+0) SSH 다시 들어온 뒤 한 줄
+   cd ~/carla-project && git pull
+
+1) 서버 살아있나
+   ss -lntp | egrep ':2000|:2001' || true
+   sudo docker ps --filter name=carla_server
+
+2) 서버 없으면 기동
+   bash scripts/vm/carla_server_start.sh
+   bash scripts/vm/carla_ports_wait.sh
+
+3) 클라이언트 (탑뷰 포스터 스틸)
+   CARLA_PROJECT=$HOME/carla-project PHOTO_OUT=logs/photos/poster_baseline_top V2V=0 bash scripts/vm/client_poster_top.sh
+   CARLA_PROJECT=$HOME/carla-project PHOTO_OUT=logs/photos/poster_device_top   V2V=1 bash scripts/vm/client_poster_top.sh
+
+4) SSH 끊겨도 돌아가게 (권장)
+   tmux new -s carla
+   # 안에서 2)~3) 실행  →  detach: Ctrl+B, D
+   # 다시 붙기: tmux attach -t carla
+
+5) 로그만 남기고 백그라운드 (tty 없을 때)
+   nohup env CARLA_PROJECT=$HOME/carla-project PHOTO_OUT=logs/photos/poster_baseline_top V2V=0 \
+     bash scripts/vm/client_poster_top_nohup.sh > ~/client_poster.log 2>&1 &
+   tail -f ~/client_poster.log
+
+6) 자주 쓰는 확인
+   ls -1 logs/photos/poster_* | grep top
+   grep cruise logs/photos/poster_*/*.png 2>/dev/null || ls logs/photos/poster_*/*cruise* 2>/dev/null
+
+참고
+----
+- wheel 파일명: carla-0.9.13-cp37-cp37m-manylinux_2_27_x86_64.whl 가 프로젝트 루트에 있어야 함.
+- numpy: requirements.txt 는 Python 3.7 용 (numpy<1.22).
+- CARLA 이미지 안 시작 스크립트: /home/carla/CarlaUE4.sh (경로 틀리면 서버 즉시 종료).
