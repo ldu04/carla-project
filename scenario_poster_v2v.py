@@ -557,6 +557,10 @@ def run_one_scenario(
         cam, buf = _spawn_world_camera(
             world, bp_lib, image_w, image_h, cam_fov, sensor_tick=0.0
         )
+        print(
+            f"[poster] {spec.name} rgb_cam {image_w}x{image_h} fov={cam_fov}",
+            flush=True,
+        )
 
         # 로그 파일
         ticks_csv = os.path.join(output_dir, "ticks.csv")
@@ -608,23 +612,34 @@ def run_one_scenario(
     
             # 워밍업: 초기 속도 수렴 (최소 2초 권장)
             warmup_ticks = int(round(2.0 / max(fixed_dt, 1e-6)))
-            for _ in range(max(10, warmup_ticks)):
+            _wu = max(10, warmup_ticks)
+            print(
+                f"[poster] {spec.name} warmup ticks={_wu} (~{_wu * fixed_dt:.2f}s sim) …",
+                flush=True,
+            )
+            for _ in range(_wu):
                 world.tick()
                 for actor in (a, b, c):
                     cur = _speed_ms(actor)
                     th, br = _cruise_control(speed_ms, cur)
                     actor.apply_control(carla.VehicleControl(throttle=th, brake=br))
-    
+
             # 워밍업이 끝난 뒤의 실제 간격을 "초기"로 삼는다. (브레이크샷 기준 일관성)
             ab_initial = float(_distance_m(a, b))
             bc_initial = float(_distance_m(b, c))
-    
+            print(
+                f"[poster] {spec.name} warmup done ab={ab_initial:.2f}m bc={bc_initial:.2f}m "
+                f"main_loop max_ticks={max_ticks}",
+                flush=True,
+            )
+
             # 캡처는 "조건을 만족한 tick 다음 tick"에 수행한다.
             # (카메라 transform이 다음 센서 프레임부터 적용되기 때문)
             pending_label: Optional[str] = None
             pending_path: Optional[str] = None
             last_used_fov: float = float(cam_fov)
-    
+            heartbeat_every = max(1, int(round(5.0 / max(fixed_dt, 1e-6))))
+
             for tick_idx in range(int(max_ticks)):
                 # 캡처가 예약되어 있으면, tick 전에 카메라를 ABC 기준으로 배치해둔다.
                 # (FOV 재시도에서 센서를 재스폰할 수 있으므로 cam/buf를 갱신한다.)
@@ -758,7 +773,7 @@ def run_one_scenario(
                 bc_m = float(_distance_m(b, c))
                 b_speed = float(_speed_ms(b))
                 c_speed = float(_speed_ms(c))
-    
+
                 wtr.writerow(
                     {
                         "tick": tick_idx,
@@ -771,7 +786,16 @@ def run_one_scenario(
                         "c_brake": f"{c_brake:.3f}",
                     }
                 )
-    
+
+                if tick_idx > 0 and tick_idx % heartbeat_every == 0:
+                    print(
+                        f"[poster] {spec.name} tick={tick_idx} sim_t={sim_time:.2f}s "
+                        f"ab={ab_m:.1f} bc={bc_m:.1f} "
+                        f"shots cruise={did_cruise} brake={did_brake} "
+                        f"compare={did_compare} result={did_result}",
+                        flush=True,
+                    )
+
                 # 충돌 근사(포스터 목적): BC<2m
                 if not collision and bc_m < 2.0:
                     collision = True
@@ -867,6 +891,13 @@ def run_one_scenario(
                 # 종료 조건: result_shot까지 찍었고 비교샷까지 찍었다면 종료 가능
                 if did_cruise and did_brake and (compare_t_star_s is None or did_compare) and did_result:
                     break
+
+        print(
+            f"[poster] {spec.name} finished collision={collision} "
+            f"t_star_compare_s="
+            f"{t_star_found if spec.name == 'scenario1' else compare_t_star_s}",
+            flush=True,
+        )
 
         out = RunSummary(
             collision=bool(collision),
@@ -1028,6 +1059,7 @@ def main() -> None:
         compare_lock_camera=bool(int(args.compare_lock_camera)),
         compare_camera_from_s1=None,
     )
+    print("[poster] scenario1 complete, physics settle …", flush=True)
 
     # 시나리오1 종료 직후 물리/스폰 정리 시간을 조금 준다.
     # async 모드에서는 tick이 의미 없을 수 있어 잠깐 sync로 돌렸다가 원복한다.
@@ -1054,6 +1086,7 @@ def main() -> None:
             "X(--compare-bc-lt-m)를 키우거나 조건을 완화하세요.",
             flush=True,
         )
+    print("[poster] starting scenario2 …", flush=True)
     s2 = run_one_scenario(
         scenario2,
         world,
