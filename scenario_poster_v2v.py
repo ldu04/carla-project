@@ -454,31 +454,49 @@ def _spawn_abc(world: Any, carla: Any, ab_m: float, bc_m: float) -> Tuple[Any, A
     if not spawns:
         raise RuntimeError("no spawn points in map")
 
-    base = spawns[0]
-    # B를 기준으로 A는 앞(+), C는 뒤(-)
-    b_tf = carla.Transform(
-        carla.Location(base.location.x, base.location.y, base.location.z + 0.8),
-        base.rotation,
-    )
-    a_tf = _forward_offset_tf(b_tf, ab_m, carla)
-    c_tf = _forward_offset_tf(b_tf, -bc_m, carla)
-
     # 포스터 가독성: A/B/C 색상 구분 (가능한 blueprint만)
-    # bp_lib.filter()에서 나온 blueprint를 그대로 사용 (A/B는 서로 다른 id 우선)
     a_bp = a_truck_bp
     b_bp = b_truck_bp
     c_bp = sedan_bp
-    _try_set_color(a_bp, (220, 60, 60))    # A: red
-    _try_set_color(b_bp, (70, 120, 220))   # B: blue
-    _try_set_color(c_bp, (60, 200, 120))   # C: green
+    _try_set_color(a_bp, (220, 60, 60))  # A: red
+    _try_set_color(b_bp, (70, 120, 220))  # B: blue
+    _try_set_color(c_bp, (60, 200, 120))  # C: green
 
-    # spawn 충돌을 완화하기 위해 try_spawn + 약간의 높이 보정
-    b = world.try_spawn_actor(b_bp, b_tf)
-    a = world.try_spawn_actor(a_bp, a_tf)
-    c = world.try_spawn_actor(c_bp, c_tf)
-    if not (a and b and c):
-        raise RuntimeError("spawn failed: could not place A,B,C")
-    return a, b, c
+    # 첫 스폰 포인트만 쓰면 장애물/경사/겹침으로 실패할 수 있음 → 여러 지점·Z 보정 재시도
+    max_bases = min(len(spawns), 80)
+    z_lifts = (0.8, 1.2, 1.6)
+    last_err = None
+    for bi in range(max_bases):
+        base = spawns[bi]
+        for dz in z_lifts:
+            b_tf = carla.Transform(
+                carla.Location(base.location.x, base.location.y, base.location.z + dz),
+                base.rotation,
+            )
+            a_tf = _forward_offset_tf(b_tf, ab_m, carla)
+            c_tf = _forward_offset_tf(b_tf, -bc_m, carla)
+
+            b = world.try_spawn_actor(b_bp, b_tf)
+            a = world.try_spawn_actor(a_bp, a_tf)
+            c = world.try_spawn_actor(c_bp, c_tf)
+            if a and b and c:
+                return a, b, c
+
+            for actor in (a, b, c):
+                if actor is not None:
+                    try:
+                        actor.destroy()
+                    except Exception:
+                        pass
+            last_err = (bi, dz)
+
+    hint = (
+        f"tried spawn_points[0..{max_bases - 1}] with z+{z_lifts} — "
+        "맵을 바꾸거나 CARLA 재시작 후 재실행해 보세요."
+    )
+    if last_err:
+        hint += f" last_try=(idx={last_err[0]}, dz={last_err[1]})."
+    raise RuntimeError(f"spawn failed: could not place A,B,C ({hint})")
 
 
 def _weather_from_name(carla: Any, name: str) -> Any:
