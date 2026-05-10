@@ -167,7 +167,6 @@ def _vehicle_bbox_corners_world(carla: Any, actor: Any) -> list:
     # bb.location은 actor 원점 기준 오프셋, bb.rotation은 actor 기준 회전.
     bb_tf = carla.Transform(bb.location, bb.rotation)
     actor_tf = actor.get_transform()
-    world_tf = actor_tf * bb_tf
     e = bb.extent
     # 8 corners in bbox-local
     corners_local = [
@@ -176,7 +175,8 @@ def _vehicle_bbox_corners_world(carla: Any, actor: Any) -> list:
         for sy in (-1.0, 1.0)
         for sz in (-1.0, 1.0)
     ]
-    return [world_tf.transform(c) for c in corners_local]
+    # CARLA 0.9.13 Python: 일부 빌드에서 Transform * Transform 미지원 → 두 단계 변환으로 동일 결과
+    return [actor_tf.transform(bb_tf.transform(c)) for c in corners_local]
 
 
 def _vehicle_bbox_corners_at_predicted_location(
@@ -462,8 +462,8 @@ def _spawn_abc(world: Any, carla: Any, ab_m: float, bc_m: float) -> Tuple[Any, A
     _try_set_color(b_bp, (70, 120, 220))  # B: blue
     _try_set_color(c_bp, (60, 200, 120))  # C: green
 
-    # 첫 스폰 포인트만 쓰면 장애물/경사/겹침으로 실패할 수 있음 → 여러 지점·Z 보정 재시도
-    max_bases = min(len(spawns), 80)
+    # 첫 스폰 포인트만 쓰면 장애물/경사/겹침으로 실패할 수 있음 → 여러 지점·Z 보정 재시도 (상한 10)
+    max_bases = min(len(spawns), 10)
     z_lifts = (0.8, 1.2, 1.6)
     last_err = None
     for bi in range(max_bases):
@@ -480,6 +480,12 @@ def _spawn_abc(world: Any, carla: Any, ab_m: float, bc_m: float) -> Tuple[Any, A
             a = world.try_spawn_actor(a_bp, a_tf)
             c = world.try_spawn_actor(c_bp, c_tf)
             if a and b and c:
+                _m = world.get_map()
+                _map_name = getattr(_m, "name", str(_m))
+                print(
+                    f"[spawn_ok] spawn_points[{bi}] z_lift={dz:.1f}m map={_map_name}",
+                    flush=True,
+                )
                 return a, b, c
 
             for actor in (a, b, c):
