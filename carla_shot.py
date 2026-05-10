@@ -171,7 +171,9 @@ def _spawn_camera(world: Any, bp_lib: Any, w: int, h: int, fov: float) -> Tuple[
     return cam, buf
 
 
-def _compute_camera_tf(carla: Any, a: Any, b: Any, c: Any, z: float) -> Any:
+def _compute_camera_tf(
+    carla: Any, a: Any, b: Any, c: Any, z: float, back_offset_m: float = 40.0
+) -> Any:
     b_tf = b.get_transform()
     fwd = b_tf.get_forward_vector()
     la, lb, lc = a.get_location(), b.get_location(), c.get_location()
@@ -180,7 +182,11 @@ def _compute_camera_tf(carla: Any, a: Any, b: Any, c: Any, z: float) -> Any:
         y=(la.y + lb.y + lc.y) / 3.0,
         z=(la.z + lb.z + lc.z) / 3.0,
     )
-    cam_loc = carla.Location(x=center.x - fwd.x * 40.0, y=center.y - fwd.y * 40.0, z=float(z))
+    cam_loc = carla.Location(
+        x=center.x - fwd.x * float(back_offset_m),
+        y=center.y - fwd.y * float(back_offset_m),
+        z=float(z),
+    )
     yaw = float(b_tf.rotation.yaw)
     return carla.Transform(cam_loc, carla.Rotation(pitch=-35.0, yaw=yaw, roll=0.0))
 
@@ -262,6 +268,7 @@ def _spawn_abc_same_lane(world: Any, carla: Any, ab_m: float, bc_m: float) -> Tu
     def lift(tf: Any, dz: float) -> Any:
         return carla.Transform(carla.Location(tf.location.x, tf.location.y, tf.location.z + dz), tf.rotation)
 
+    # 원하는 최종 위치
     b_tf = lift(wp_b.transform, 0.8)
     a_tf = lift(wp_a.transform, 0.8)
     c_tf = lift(wp_c.transform, 0.8)
@@ -320,13 +327,15 @@ def main() -> None:
             world.tick()
 
         # 안정화 후 위치 기준으로 카메라를 다시 계산/적용
-        cam_tf = _compute_camera_tf(carla, a, b, c, z=20.0)
+        cam_tf = _compute_camera_tf(carla, a, b, c, z=20.0, back_offset_m=40.0)
         cam.set_transform(cam_tf)
 
-        # 촬영 tick (world.tick() 반환값이 snapshot)
-        snap = world.tick()
-        if not _wait_for_frame(buf, int(snap.frame), timeout_s=2.0):
-            raise RuntimeError(f"camera frame not ready (snap.frame={int(snap.frame)})")
+        # 촬영 tick (0.9.13에서는 world.tick()이 frame id(int)를 반환하는 빌드가 있음)
+        frame_id = world.tick()
+        snap = world.get_snapshot()
+        target_frame = int(getattr(snap, "frame", frame_id))
+        if not _wait_for_frame(buf, target_frame, timeout_s=2.0):
+            raise RuntimeError(f"camera frame not ready (frame={target_frame})")
 
         outside, total = _count_abc_outside_frame(carla, cam_tf, 1920, 1080, 90.0, a, b, c)
         if outside > 0:

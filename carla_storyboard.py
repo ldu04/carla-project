@@ -40,7 +40,7 @@ from carla_shot import (  # noqa: F401
 )
 
 
-ShotSpec = Tuple[str, float, float]  # (filename, ab_m, bc_m)
+ShotSpec = Tuple[str, float, float, Optional[float], Optional[float]]  # (filename, ab_m, bc_m, cam_z, cam_offset_back)
 
 
 def _ensure_dir(p: str) -> None:
@@ -69,6 +69,7 @@ def _run_one_shot(
     img_h: int,
     fov: float,
     cam_z: float,
+    cam_offset_back: float,
 ) -> bool:
     """
     1) A/B/C 스폰(같은 lane)
@@ -91,13 +92,17 @@ def _run_one_shot(
             world.tick()
 
         # 안정화 후 위치 기준 카메라 재계산
-        cam_tf = _compute_camera_tf(carla, a, b, c, z=float(cam_z))
+        cam_tf = _compute_camera_tf(
+            carla, a, b, c, z=float(cam_z), back_offset_m=float(cam_offset_back)
+        )
         cam.set_transform(cam_tf)
 
-        # 촬영 tick (tick 반환 snapshot)
-        snap = world.tick()
-        if not _wait_for_frame(buf, int(snap.frame), timeout_s=2.0):
-            print(f"[WARN] frame wait timeout (snap.frame={int(snap.frame)})", flush=True)
+        # 촬영 tick (0.9.13에서는 world.tick()이 frame id(int)를 반환하는 빌드가 있음)
+        frame_id = world.tick()
+        snap = world.get_snapshot()
+        target_frame = int(getattr(snap, "frame", frame_id))
+        if not _wait_for_frame(buf, target_frame, timeout_s=2.0):
+            print(f"[WARN] frame wait timeout (frame={target_frame})", flush=True)
 
         outside, total = _count_abc_outside_frame(
             carla, cam_tf, int(img_w), int(img_h), float(fov), a, b, c
@@ -139,11 +144,12 @@ def main() -> None:
     p.add_argument("--port", type=int, default=int(CARLA_PORT))
     p.add_argument("--map", default="Town04")
     p.add_argument("--fixed-dt", type=float, default=0.05)
-    p.add_argument("--stable-ticks", type=int, default=5)
+    p.add_argument("--stable-ticks", type=int, default=10)
     p.add_argument("--img-w", type=int, default=1920)
     p.add_argument("--img-h", type=int, default=1080)
     p.add_argument("--fov", type=float, default=90.0)
     p.add_argument("--cam-z", type=float, default=20.0)
+    p.add_argument("--cam-offset-back", type=float, default=40.0)
     args = p.parse_args()
 
     import carla
@@ -151,14 +157,16 @@ def main() -> None:
     out_dir = os.path.abspath(str(args.output_dir))
     _ensure_dir(out_dir)
 
+    # 좁은 간격(겹침에 가까운 값)은 스폰 자체가 물리적으로 거부될 수 있음.
+    # 포스터 목적상 "위험해 보이는" 앵글로 보완하고, 간격은 안전한 값으로 둔다.
     shots: List[ShotSpec] = [
-        ("shot1_cruise.png", 30.0, 20.0),
-        ("shot2_a_brake.png", 15.0, 20.0),
-        ("shot3_b_brake.png", 10.0, 12.0),
-        ("shot4_no_device.png", 10.0, 6.0),
-        ("shot5_collision.png", 8.0, 2.0),
-        ("shot4_with_device.png", 10.0, 14.0),
-        ("shot5_safe.png", 8.0, 12.0),
+        ("shot1_cruise.png", 30.0, 20.0, None, None),
+        ("shot2_a_brake.png", 15.0, 20.0, None, None),
+        ("shot3_b_brake.png", 10.0, 12.0, None, None),
+        ("shot4_no_device.png", 10.0, 10.0, 12.0, 25.0),  # bc 6→10, 앵글로 위험감 강화
+        ("shot5_collision.png", 8.0, 8.0, 12.0, 25.0),    # bc 2→8, 앵글로 근접 강조
+        ("shot4_with_device.png", 10.0, 14.0, None, None),
+        ("shot5_safe.png", 8.0, 12.0, None, None),
     ]
 
     client = carla.Client(str(args.host), int(args.port))
@@ -175,9 +183,16 @@ def main() -> None:
         world.apply_settings(settings)
 
         ok_count = 0
-        for idx, (fname, ab_m, bc_m) in enumerate(shots, start=1):
+        for idx, (fname, ab_m, bc_m, cam_z_override, cam_back_override) in enumerate(shots, start=1):
             out_path = os.path.join(out_dir, fname)
             print(f"\n=== Shot {idx}/7: {fname} ===", flush=True)
+            _cz = float(args.cam_z) if cam_z_override is None else float(cam_z_override)
+            _cb = (
+                float(args.cam_offset_back)
+                if cam_back_override is None
+                else float(cam_back_override)
+            )
+            print(f"[shot_cfg] ab={ab_m} bc={bc_m} cam_z={_cz} cam_back={_cb}", flush=True)
             ok = _run_one_shot(
                 world=world,
                 carla=carla,
@@ -190,7 +205,8 @@ def main() -> None:
                 img_w=int(args.img_w),
                 img_h=int(args.img_h),
                 fov=float(args.fov),
-                cam_z=float(args.cam_z),
+                cam_z=_cz,
+                cam_offset_back=_cb,
             )
             ok_count += 1 if ok else 0
 
