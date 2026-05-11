@@ -26,6 +26,7 @@ Shots (ab/bc는 m, "C=0 기준 절대 위치"에서 변환):
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import time
 from typing import Any, List, Optional, Tuple
@@ -184,6 +185,139 @@ def _run_one_shot(
             _destroy_quiet(actor)
 
 
+def _run_collision_shot(
+    *,
+    world: Any,
+    carla: Any,
+    bp_lib: Any,
+    out_path: str,
+    pos_a_m: float,
+    pos_b_m: float,
+    pos_c_m: float,
+    fixed_dt: float,
+    stable_ticks: int,
+    img_w: int,
+    img_h: int,
+    fov: float,
+    cam_z: float,
+    cam_offset_back: float,
+    cam_pitch_deg: float,
+) -> bool:
+    """
+    shot5_collision 전용: "겹쳐 스폰"이 아니라 C를 뒤에서 접근시켜
+    실제 접촉(또는 매우 근접) 순간을 캡처한다.
+    - 절대 위치(posA,posB)는 유지
+    - C는 posB 뒤에서 시작해 posB까지 이동 후 캡처 (캡처 시점에 C≈B)
+    """
+    cam = None
+    a = b = c = None
+    col_sensor = None
+    collided = {"hit": False}
+
+    def on_collision(_evt: Any) -> None:
+        collided["hit"] = True
+
+    try:
+        _pa, _pb = float(pos_a_m), float(pos_b_m)
+        # C는 B 뒤에서 시작(스폰 안정) → 앞으로 붙여서 충돌 순간 캡처
+        c_start = float(pos_b_m) - 12.0
+
+        print(
+            f"[shot] collision-shot spawn abs(A,B,Cstart)=({_pa},{_pb},{c_start}) -> {out_path}",
+            flush=True,
+        )
+        a, b, c = _spawn_abc_absolute_positions(
+            world, carla, pos_a_m=_pa, pos_b_m=_pb, pos_c_m=c_start
+        )
+
+        # collision sensor on B
+        col_bp = bp_lib.find("sensor.other.collision")
+        col_sensor = world.spawn_actor(col_bp, carla.Transform(), attach_to=b)
+        col_sensor.listen(on_collision)
+
+        cam, buf = _spawn_camera(world, bp_lib, int(img_w), int(img_h), float(fov))
+
+        # stabilize
+        for _ in range(int(stable_ticks)):
+            world.tick()
+
+        # freeze A/B, push C forward
+        a.apply_control(carla.VehicleControl(throttle=0.0, brake=1.0))
+        b.apply_control(carla.VehicleControl(throttle=0.0, brake=1.0))
+        c.apply_control(carla.VehicleControl(throttle=0.55, brake=0.0))
+
+        # step until collision or very close
+        max_ticks = int(max(60, round(6.0 / float(fixed_dt))))  # ~6 seconds
+        for _ in range(max_ticks):
+            world.tick()
+            if collided["hit"]:
+                break
+            # close-enough fallback (avoid waiting for sensor edge cases)
+            lb = b.get_location()
+            lc = c.get_location()
+            if math.hypot(lb.x - lc.x, lb.y - lc.y) < 1.5:
+                break
+
+        # stop C
+        c.apply_control(carla.VehicleControl(throttle=0.0, brake=1.0))
+        world.tick()
+
+        cam_tf = _compute_camera_tf(
+            carla,
+            a,
+            b,
+            c,
+            z=float(cam_z),
+            back_offset_m=float(cam_offset_back),
+            pitch_deg=float(cam_pitch_deg),
+        )
+        cam.set_transform(cam_tf)
+
+        frame_id = world.tick()
+        snap = world.get_snapshot()
+        target_frame = int(getattr(snap, "frame", frame_id))
+        if not _wait_for_frame(buf, target_frame, timeout_s=2.0):
+            print(f"[WARN] frame wait timeout (frame={target_frame})", flush=True)
+
+        outside, total = _count_abc_outside_frame(
+            carla, cam_tf, int(img_w), int(img_h), float(fov), a, b, c
+        )
+        if outside > 0:
+            print(
+                f"[WARN] bbox corners outside frame: {outside}/{total} "
+                f"(collision-shot z={cam_z} fov={fov})",
+                flush=True,
+            )
+
+        img, _fr = buf.get()
+        if img is None:
+            raise RuntimeError("no image received from camera")
+
+        _ensure_dir(os.path.dirname(os.path.abspath(out_path)))
+        img.save_to_disk(str(out_path), carla.ColorConverter.Raw)
+        print(f"[ok] saved {out_path}", flush=True)
+        return True
+
+    except Exception as e:
+        print(f"[FAIL] {out_path}: {type(e).__name__}: {e}", flush=True)
+        return False
+    finally:
+        try:
+            if col_sensor is not None:
+                col_sensor.stop()
+                col_sensor.destroy()
+        except Exception:
+            pass
+        try:
+            if cam is not None:
+                cam.stop()
+                cam.destroy()
+        except Exception:
+            pass
+        for actor in (a, b, c):
+            _destroy_quiet(actor)
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--output-dir", default="/output/storyboard")
@@ -314,6 +448,42 @@ def main() -> None:
                 cam_offset_back=_cb,
                 cam_pitch_deg=_cp,
             )
+            if os.path.splitext(os.path.basename(fname))[0] == "shot5_collision":
+                ok = _run_collision_shot(
+                    world=world,
+                    carla=carla,
+                    bp_lib=bp_lib,
+                    out_path=out_path,
+                    pos_a_m=float(pos_a_m),
+                    pos_b_m=float(pos_b_m),
+                    pos_c_m=float(pos_c_m),
+                    fixed_dt=float(args.fixed_dt),
+                    stable_ticks=int(args.stable_ticks),
+                    img_w=int(args.img_w),
+                    img_h=int(args.img_h),
+                    fov=float(args.fov),
+                    cam_z=_cz,
+                    cam_offset_back=_cb,
+                    cam_pitch_deg=_cp,
+                )
+            else:
+                ok = _run_one_shot(
+                    world=world,
+                    carla=carla,
+                    bp_lib=bp_lib,
+                    out_path=out_path,
+                    pos_a_m=float(pos_a_m),
+                    pos_b_m=float(pos_b_m),
+                    pos_c_m=float(pos_c_m),
+                    fixed_dt=float(args.fixed_dt),
+                    stable_ticks=int(args.stable_ticks),
+                    img_w=int(args.img_w),
+                    img_h=int(args.img_h),
+                    fov=float(args.fov),
+                    cam_z=_cz,
+                    cam_offset_back=_cb,
+                    cam_pitch_deg=_cp,
+                )
             ok_count += 1 if ok else 0
 
             # 컷 사이 물리 정리 시간(스폰 충돌/잔상 완화)
