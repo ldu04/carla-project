@@ -172,7 +172,13 @@ def _spawn_camera(world: Any, bp_lib: Any, w: int, h: int, fov: float) -> Tuple[
 
 
 def _compute_camera_tf(
-    carla: Any, a: Any, b: Any, c: Any, z: float, back_offset_m: float = 40.0
+    carla: Any,
+    a: Any,
+    b: Any,
+    c: Any,
+    z: float,
+    back_offset_m: float = 40.0,
+    pitch_deg: float = -35.0,
 ) -> Any:
     b_tf = b.get_transform()
     fwd = b_tf.get_forward_vector()
@@ -188,7 +194,9 @@ def _compute_camera_tf(
         z=float(z),
     )
     yaw = float(b_tf.rotation.yaw)
-    return carla.Transform(cam_loc, carla.Rotation(pitch=-35.0, yaw=yaw, roll=0.0))
+    return carla.Transform(
+        cam_loc, carla.Rotation(pitch=float(pitch_deg), yaw=yaw, roll=0.0)
+    )
 
 
 def _find_straight_waypoint(world: Any, carla: Any, needed_forward_m: float) -> Any:

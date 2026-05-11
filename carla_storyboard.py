@@ -40,7 +40,14 @@ from carla_shot import (  # noqa: F401
 )
 
 
-ShotSpec = Tuple[str, float, float, Optional[float], Optional[float]]  # (filename, ab_m, bc_m, cam_z, cam_offset_back)
+ShotSpec = Tuple[
+    str,
+    float,
+    float,
+    Optional[float],
+    Optional[float],
+    Optional[float],
+]  # (filename, ab_m, bc_m, cam_z, cam_offset_back, cam_pitch_deg)
 
 
 def _ensure_dir(p: str) -> None:
@@ -70,6 +77,7 @@ def _run_one_shot(
     fov: float,
     cam_z: float,
     cam_offset_back: float,
+    cam_pitch_deg: float,
 ) -> bool:
     """
     1) A/B/C 스폰(같은 lane)
@@ -93,7 +101,13 @@ def _run_one_shot(
 
         # 안정화 후 위치 기준 카메라 재계산
         cam_tf = _compute_camera_tf(
-            carla, a, b, c, z=float(cam_z), back_offset_m=float(cam_offset_back)
+            carla,
+            a,
+            b,
+            c,
+            z=float(cam_z),
+            back_offset_m=float(cam_offset_back),
+            pitch_deg=float(cam_pitch_deg),
         )
         cam.set_transform(cam_tf)
 
@@ -142,7 +156,7 @@ def main() -> None:
     p.add_argument("--output-dir", default="/output/storyboard")
     p.add_argument("--host", default=CARLA_HOST)
     p.add_argument("--port", type=int, default=int(CARLA_PORT))
-    p.add_argument("--map", default="Town04")
+    p.add_argument("--map", default="Town05")
     p.add_argument("--fixed-dt", type=float, default=0.05)
     p.add_argument("--stable-ticks", type=int, default=10)
     p.add_argument("--img-w", type=int, default=1920)
@@ -150,6 +164,12 @@ def main() -> None:
     p.add_argument("--fov", type=float, default=90.0)
     p.add_argument("--cam-z", type=float, default=20.0)
     p.add_argument("--cam-offset-back", type=float, default=40.0)
+    p.add_argument(
+        "--cam-pitch",
+        type=float,
+        default=-55.0,
+        help="카메라 pitch(deg). 더 수직에 가깝게 보려면 -60~-75 권장.",
+    )
     args = p.parse_args()
 
     import carla
@@ -160,13 +180,13 @@ def main() -> None:
     # 좁은 간격(겹침에 가까운 값)은 스폰 자체가 물리적으로 거부될 수 있음.
     # 포스터 목적상 "위험해 보이는" 앵글로 보완하고, 간격은 안전한 값으로 둔다.
     shots: List[ShotSpec] = [
-        ("shot1_cruise.png", 30.0, 20.0, None, None),
-        ("shot2_a_brake.png", 15.0, 20.0, None, None),
-        ("shot3_b_brake.png", 10.0, 12.0, None, None),
-        ("shot4_no_device.png", 10.0, 10.0, 12.0, 25.0),  # bc 6→10, 앵글로 위험감 강화
-        ("shot5_collision.png", 8.0, 8.0, 12.0, 25.0),    # bc 2→8, 앵글로 근접 강조
-        ("shot4_with_device.png", 10.0, 14.0, None, None),
-        ("shot5_safe.png", 8.0, 12.0, None, None),
+        ("shot1_cruise.png", 30.0, 20.0, None, None, None),
+        ("shot2_a_brake.png", 15.0, 20.0, None, None, None),
+        ("shot3_b_brake.png", 10.0, 12.0, None, None, None),
+        ("shot4_no_device.png", 10.0, 10.0, 12.0, 25.0, -65.0),  # 위험감 컷: 더 탑뷰
+        ("shot5_collision.png", 8.0, 8.0, 12.0, 25.0, -70.0),    # 긴박감: 더 탑뷰
+        ("shot4_with_device.png", 10.0, 14.0, None, None, None),
+        ("shot5_safe.png", 8.0, 12.0, None, None, None),
     ]
 
     client = carla.Client(str(args.host), int(args.port))
@@ -183,7 +203,14 @@ def main() -> None:
         world.apply_settings(settings)
 
         ok_count = 0
-        for idx, (fname, ab_m, bc_m, cam_z_override, cam_back_override) in enumerate(shots, start=1):
+        for idx, (
+            fname,
+            ab_m,
+            bc_m,
+            cam_z_override,
+            cam_back_override,
+            cam_pitch_override,
+        ) in enumerate(shots, start=1):
             out_path = os.path.join(out_dir, fname)
             print(f"\n=== Shot {idx}/7: {fname} ===", flush=True)
             _cz = float(args.cam_z) if cam_z_override is None else float(cam_z_override)
@@ -192,7 +219,11 @@ def main() -> None:
                 if cam_back_override is None
                 else float(cam_back_override)
             )
-            print(f"[shot_cfg] ab={ab_m} bc={bc_m} cam_z={_cz} cam_back={_cb}", flush=True)
+            _cp = float(args.cam_pitch) if cam_pitch_override is None else float(cam_pitch_override)
+            print(
+                f"[shot_cfg] ab={ab_m} bc={bc_m} cam_z={_cz} cam_back={_cb} cam_pitch={_cp}",
+                flush=True,
+            )
             ok = _run_one_shot(
                 world=world,
                 carla=carla,
@@ -207,6 +238,7 @@ def main() -> None:
                 fov=float(args.fov),
                 cam_z=_cz,
                 cam_offset_back=_cb,
+                cam_pitch_deg=_cp,
             )
             ok_count += 1 if ok else 0
 
