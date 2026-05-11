@@ -181,21 +181,22 @@ def _compute_camera_tf(
     pitch_deg: float = -35.0,
 ) -> Any:
     b_tf = b.get_transform()
-    fwd = b_tf.get_forward_vector()
     la, lb, lc = a.get_location(), b.get_location(), c.get_location()
-    center = carla.Location(
-        x=(la.x + lb.x + lc.x) / 3.0,
-        y=(la.y + lb.y + lc.y) / 3.0,
-        z=(la.z + lb.z + lc.z) / 3.0,
-    )
-    cam_loc = carla.Location(
-        x=center.x - fwd.x * float(back_offset_m),
-        y=center.y - fwd.y * float(back_offset_m),
-        z=float(z),
-    )
+    # 프레이밍 안정성: B를 화면 중심(기준점)으로 고정.
+    # pitch=-90(근처)이면 B 위에서 수직 탑다운으로 촬영(백오프 무시).
+    pitch = float(pitch_deg)
+    if pitch <= -89.0:
+        cam_loc = carla.Location(x=float(lb.x), y=float(lb.y), z=float(z))
+    else:
+        fwd = b_tf.get_forward_vector()
+        cam_loc = carla.Location(
+            x=float(lb.x) - fwd.x * float(back_offset_m),
+            y=float(lb.y) - fwd.y * float(back_offset_m),
+            z=float(z),
+        )
     yaw = float(b_tf.rotation.yaw)
     return carla.Transform(
-        cam_loc, carla.Rotation(pitch=float(pitch_deg), yaw=yaw, roll=0.0)
+        cam_loc, carla.Rotation(pitch=pitch, yaw=yaw, roll=0.0)
     )
 
 

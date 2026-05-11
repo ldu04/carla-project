@@ -166,9 +166,10 @@ def main() -> None:
     p.add_argument("--stable-ticks", type=int, default=10)
     p.add_argument("--img-w", type=int, default=1920)
     p.add_argument("--img-h", type=int, default=1080)
-    p.add_argument("--fov", type=float, default=90.0)
-    p.add_argument("--cam-z", type=float, default=20.0)
-    p.add_argument("--cam-offset-back", type=float, default=40.0)
+    # 목적 고정: B가 화면 중앙 + B 위에서 수직 탑다운
+    p.add_argument("--fov", type=float, default=120.0)
+    p.add_argument("--cam-z", type=float, default=24.0)
+    p.add_argument("--cam-offset-back", type=float, default=0.0)
     p.add_argument(
         "--only",
         default="",
@@ -185,8 +186,8 @@ def main() -> None:
     p.add_argument(
         "--cam-pitch",
         type=float,
-        default=-55.0,
-        help="카메라 pitch(deg). 더 수직에 가깝게 보려면 -60~-75 권장.",
+        default=-90.0,
+        help="카메라 pitch(deg). -90이면 B 위에서 수직 탑다운(백오프 무시).",
     )
     args = p.parse_args()
 
@@ -202,14 +203,13 @@ def main() -> None:
     # shot5_collision vs shot5_safe: 같은 대목이지만 기기 없음=collision·AB 타이트(8), 기기 있음=B 조기 반응→AB 여유(12).
     # shot5_collision: z=12·back=25에서 bbox 많이 이탈(14~18/24) → z/back 소폭 상향으로 ABC 전부 프레임 목표.
     shots: List[ShotSpec] = [
-        # shot1은 간격이 커서 프레임 가장자리로 밀리기 쉬움 → z/back 소폭 상향으로 0/24 맞춤
-        ("shot1_cruise.png", 30.0, 20.0, 20.0, 30.0, None),
+        ("shot1_cruise.png", 30.0, 20.0, None, None, None),
         ("shot2_a_brake.png", 15.0, 20.0, None, None, None),
         ("shot3_b_brake.png", 10.0, 8.0, None, None, None),
         ("shot4_no_device.png", 10.0, 8.0, None, None, None),
-        # shot5_collision은 "ABC 모두 프레임 안"을 만족하는 최소값으로 튜닝:
-        # fov=120, z=18, back=28, pitch=-60 (빠른 검증: --only shot5_collision)
-        ("shot5_collision.png", 8.0, 8.0, 18.0, 28.0, -60.0),
+        # shot5_collision (no-device): B는 A를 박지 않되, C가 B를 박는 상황을 암시
+        # - AB는 여유(충돌 방지), BC는 좁게(추돌 유도)
+        ("shot5_collision.png", 12.0, 6.0, None, None, None),
         ("shot4_with_device.png", 10.0, 14.0, None, None, None),
         ("shot5_safe.png", 12.0, 12.0, None, None, None),
     ]
