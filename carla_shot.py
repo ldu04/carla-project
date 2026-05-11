@@ -305,6 +305,7 @@ def _spawn_abc_absolute_positions(
     pos_a_m: float,
     pos_b_m: float,
     pos_c_m: float,
+    anchor_wp: Any = None,
 ) -> Tuple[Any, Any, Any]:
     """
     C=0 기준의 절대 좌표(전방 +m)로 A/B/C를 같은 lane에 스폰한다.
@@ -318,8 +319,11 @@ def _spawn_abc_absolute_positions(
     _try_set_color(b_bp, (70, 120, 220))  # B blue
     _try_set_color(c_bp, (60, 200, 120))  # C green
 
-    max_pos = float(max(pos_a_m, pos_b_m, pos_c_m))
-    anchor = _find_straight_waypoint(world, carla, needed_forward_m=max_pos + 10.0)
+    if anchor_wp is None:
+        max_pos = float(max(pos_a_m, pos_b_m, pos_c_m))
+        anchor = _find_straight_waypoint(world, carla, needed_forward_m=max_pos + 10.0)
+    else:
+        anchor = anchor_wp
 
     def advance(wp: Any, meters: float) -> Any:
         step = 2.0
