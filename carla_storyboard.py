@@ -380,6 +380,33 @@ def main() -> None:
         ("shot5_safe.png", 70.0, 60.0, 50.0, None, None, None),
     ]
 
+    if bool(args.list_shots):
+        for idx, (fname, *_rest) in enumerate(shots, start=1):
+            print(f"{idx}: {fname}", flush=True)
+        return
+
+    only_raw = str(args.only or "").strip()
+    if only_raw:
+        tokens = [t.strip() for t in only_raw.split(",") if t.strip()]
+        by_index = {int(t) for t in tokens if t.isdigit()}
+        by_name = {t for t in tokens if not t.isdigit()}
+        filtered: List[ShotSpec] = []
+        for idx, spec in enumerate(shots, start=1):
+            fname = spec[0]
+            stem = os.path.splitext(os.path.basename(fname))[0]
+            if idx in by_index or fname in by_name or stem in by_name:
+                filtered.append(spec)
+        shots = filtered
+        if not shots:
+            raise SystemExit(f"[error] --only matched no shots: {only_raw}")
+
+    client = carla.Client(str(args.host), int(args.port))
+    client.set_timeout(60.0)
+    client.load_world(str(args.map))
+    time.sleep(3.0)
+    world = client.get_world()
+    bp_lib = world.get_blueprint_library()
+
     # 배경 고정: anchor waypoint를 한 번만 선택해서 모든 shot에 재사용
     max_pos = max(max(s[1], s[2], s[3]) for s in shots)
     m = world.get_map()
@@ -413,33 +440,6 @@ def main() -> None:
     if anchor_wp is None:
         anchor_wp = _find_straight_waypoint(world, carla, needed_forward_m=float(max_pos) + 12.0)
         print("[wp_anchor] fallback to auto straight waypoint", flush=True)
-
-    if bool(args.list_shots):
-        for idx, (fname, *_rest) in enumerate(shots, start=1):
-            print(f"{idx}: {fname}", flush=True)
-        return
-
-    only_raw = str(args.only or "").strip()
-    if only_raw:
-        tokens = [t.strip() for t in only_raw.split(",") if t.strip()]
-        by_index = {int(t) for t in tokens if t.isdigit()}
-        by_name = {t for t in tokens if not t.isdigit()}
-        filtered: List[ShotSpec] = []
-        for idx, spec in enumerate(shots, start=1):
-            fname = spec[0]
-            stem = os.path.splitext(os.path.basename(fname))[0]
-            if idx in by_index or fname in by_name or stem in by_name:
-                filtered.append(spec)
-        shots = filtered
-        if not shots:
-            raise SystemExit(f"[error] --only matched no shots: {only_raw}")
-
-    client = carla.Client(str(args.host), int(args.port))
-    client.set_timeout(60.0)
-    client.load_world(str(args.map))
-    time.sleep(3.0)
-    world = client.get_world()
-    bp_lib = world.get_blueprint_library()
 
     settings = world.get_settings()
     try:
