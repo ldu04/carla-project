@@ -431,23 +431,6 @@ def main() -> None:
                 f"ab={ab_m} bc={bc_m} cam_z={_cz} cam_back={_cb} cam_pitch={_cp}",
                 flush=True,
             )
-            ok = _run_one_shot(
-                world=world,
-                carla=carla,
-                bp_lib=bp_lib,
-                out_path=out_path,
-                pos_a_m=float(pos_a_m),
-                pos_b_m=float(pos_b_m),
-                pos_c_m=float(pos_c_m),
-                fixed_dt=float(args.fixed_dt),
-                stable_ticks=int(args.stable_ticks),
-                img_w=int(args.img_w),
-                img_h=int(args.img_h),
-                fov=float(args.fov),
-                cam_z=_cz,
-                cam_offset_back=_cb,
-                cam_pitch_deg=_cp,
-            )
             if os.path.splitext(os.path.basename(fname))[0] == "shot5_collision":
                 ok = _run_collision_shot(
                     world=world,
