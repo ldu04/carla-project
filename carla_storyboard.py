@@ -202,8 +202,8 @@ def main() -> None:
     # shot5_collision vs shot5_safe: 같은 대목이지만 기기 없음=collision·AB 타이트(8), 기기 있음=B 조기 반응→AB 여유(12).
     # shot5_collision: z=12·back=25에서 bbox 많이 이탈(14~18/24) → z/back 소폭 상향으로 ABC 전부 프레임 목표.
     shots: List[ShotSpec] = [
-        # shot1은 간격이 커서 프레임 가장자리로 밀리기 쉬움 → back만 소폭(+2m) 여유
-        ("shot1_cruise.png", 30.0, 20.0, None, 30.0, None),
+        # shot1은 간격이 커서 프레임 가장자리로 밀리기 쉬움 → z/back 소폭 상향으로 0/24 맞춤
+        ("shot1_cruise.png", 30.0, 20.0, 20.0, 30.0, None),
         ("shot2_a_brake.png", 15.0, 20.0, None, None, None),
         ("shot3_b_brake.png", 10.0, 8.0, None, None, None),
         ("shot4_no_device.png", 10.0, 8.0, None, None, None),
