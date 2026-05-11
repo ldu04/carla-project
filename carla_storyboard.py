@@ -19,7 +19,7 @@ Shots (ab/bc는 m, "C=0 기준 절대 위치"에서 변환):
   3) shot3_b_brake.png       C:40  B:50  A:70  → ab=20 bc=10
   4) shot4_no_device.png     C:50  B:60  A:80  → ab=20 bc=10
   5) shot4_with_device.png   C:45  B:60  A:80  → ab=20 bc=15
-  6) shot5_collision.png     A:80  B:60  C:60  → ab=20 bc=0 (스폰 안정 위해 bc는 최소값으로 보정)
+  6) shot5_collision.png     A:80  B:60  C:60  → ab=20 bc=0 (스폰 안정 위해 bc는 최소 간격으로 보정)
   7) shot5_safe.png          C:50  B:60  A:80  → ab=20 bc=10
 """
 
@@ -95,10 +95,12 @@ def _run_one_shot(
     cam = None
     a = b = c = None
     try:
-        # 절대 좌표(C=0 기준)로 스폰. collision(C==B)은 최소한의 분리로 보정해 스폰 안정화.
+        # 절대 좌표(C=0 기준)로 스폰.
+        # collision(C==B)은 CARLA 스폰이 거부될 수 있어 "표현 가능한 최소 간격"으로 보정한다.
         _pa, _pb, _pc = float(pos_a_m), float(pos_b_m), float(pos_c_m)
-        if abs(_pc - _pb) < 1e-6:
-            _pc = _pb - 0.5
+        min_sep_m = 4.0
+        if abs(_pc - _pb) < min_sep_m:
+            _pc = _pb - min_sep_m
 
         ab_m = abs(_pa - _pb)
         bc_m = abs(_pb - _pc)
@@ -217,7 +219,7 @@ def main() -> None:
         ("shot3_b_brake.png", 70.0, 50.0, 40.0, None, None, None),
         ("shot4_no_device.png", 80.0, 60.0, 50.0, None, None, None),
         ("shot4_with_device.png", 80.0, 60.0, 45.0, None, None, None),
-        # B,C collision (C==B): 내부에서 0.5m만 보정해 스폰 안정화.
+        # B,C collision (C==B): 내부에서 최소 간격(기본 4m)으로 보정해 스폰 안정화.
         ("shot5_collision.png", 80.0, 60.0, 60.0, None, None, None),
         ("shot5_safe.png", 80.0, 60.0, 50.0, None, None, None),
     ]
