@@ -96,21 +96,35 @@ def _run_one_shot(
     a = b = c = None
     try:
         # 절대 좌표(C=0 기준)로 스폰.
-        # collision(C==B)은 CARLA 스폰이 거부될 수 있어 "표현 가능한 최소 간격"으로 보정한다.
-        _pa, _pb, _pc = float(pos_a_m), float(pos_b_m), float(pos_c_m)
-        min_sep_m = 4.0
-        if abs(_pc - _pb) < min_sep_m:
-            _pc = _pb - min_sep_m
+        # collision(C==B)은 CARLA 스폰이 거부될 수 있어 "표현 가능한 최소 간격"을 만족할 때까지 단계적으로 보정한다.
+        _pa, _pb, _pc0 = float(pos_a_m), float(pos_b_m), float(pos_c_m)
 
-        ab_m = abs(_pa - _pb)
-        bc_m = abs(_pb - _pc)
-        print(
-            f"[shot] spawn abc abs(A,B,C)=({_pa},{_pb},{_pc}) ab={ab_m} bc={bc_m} -> {out_path}",
-            flush=True,
-        )
-        a, b, c = _spawn_abc_absolute_positions(
-            world, carla, pos_a_m=_pa, pos_b_m=_pb, pos_c_m=_pc
-        )
+        def try_spawn_with_pc(pc: float) -> Tuple[Any, Any, Any]:
+            ab = abs(_pa - _pb)
+            bc = abs(_pb - pc)
+            print(
+                f"[shot] spawn abc abs(A,B,C)=({_pa},{_pb},{pc}) ab={ab} bc={bc} -> {out_path}",
+                flush=True,
+            )
+            return _spawn_abc_absolute_positions(
+                world, carla, pos_a_m=_pa, pos_b_m=_pb, pos_c_m=pc
+            )
+
+        # 일반 케이스는 그대로, collision 케이스만 여러 간격을 시도
+        if abs(_pc0 - _pb) < 1e-6:
+            spawned = False
+            last_err: Optional[Exception] = None
+            for sep in (4.0, 6.0, 8.0, 10.0, 12.0, 15.0):
+                try:
+                    a, b, c = try_spawn_with_pc(_pb - float(sep))
+                    spawned = True
+                    break
+                except Exception as e:
+                    last_err = e
+            if not spawned:
+                raise RuntimeError(f"spawn failed for collision after retries: {last_err}")
+        else:
+            a, b, c = try_spawn_with_pc(_pc0)
 
         cam, buf = _spawn_camera(world, bp_lib, int(img_w), int(img_h), float(fov))
 
