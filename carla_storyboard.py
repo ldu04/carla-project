@@ -206,7 +206,9 @@ def main() -> None:
         ("shot2_a_brake.png", 15.0, 20.0, None, None, None),
         ("shot3_b_brake.png", 10.0, 8.0, None, None, None),
         ("shot4_no_device.png", 10.0, 8.0, None, None, None),
-        ("shot5_collision.png", 8.0, 8.0, 18.0, 28.0, -68.0),
+        # shot5_collision은 "ABC 모두 프레임 안"을 만족하는 최소값으로 튜닝:
+        # fov=120, z=18, back=28, pitch=-60 (빠른 검증: --only shot5_collision)
+        ("shot5_collision.png", 8.0, 8.0, 18.0, 28.0, -60.0),
         ("shot4_with_device.png", 10.0, 14.0, None, None, None),
         ("shot5_safe.png", 12.0, 12.0, None, None, None),
     ]
