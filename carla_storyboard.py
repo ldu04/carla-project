@@ -36,6 +36,7 @@ from config import CARLA_HOST, CARLA_PORT
 from carla_shot import (  # noqa: F401
     _count_abc_outside_frame,
     _compute_camera_tf,
+    _spawn_abc_absolute_positions,
     _spawn_abc_same_lane,
     _spawn_camera,
     _wait_for_frame,
@@ -46,10 +47,11 @@ ShotSpec = Tuple[
     str,
     float,
     float,
+    float,
     Optional[float],
     Optional[float],
     Optional[float],
-]  # (filename, ab_m, bc_m, cam_z, cam_offset_back, cam_pitch_deg)
+]  # (filename, pos_a_m, pos_b_m, pos_c_m, cam_z, cam_offset_back, cam_pitch_deg)
 
 
 def _ensure_dir(p: str) -> None:
@@ -70,8 +72,9 @@ def _run_one_shot(
     carla: Any,
     bp_lib: Any,
     out_path: str,
-    ab_m: float,
-    bc_m: float,
+    pos_a_m: float,
+    pos_b_m: float,
+    pos_c_m: float,
     fixed_dt: float,
     stable_ticks: int,
     img_w: int,
@@ -92,8 +95,20 @@ def _run_one_shot(
     cam = None
     a = b = c = None
     try:
-        print(f"[shot] spawn abc ab={ab_m} bc={bc_m} -> {out_path}", flush=True)
-        a, b, c = _spawn_abc_same_lane(world, carla, float(ab_m), float(bc_m))
+        # 절대 좌표(C=0 기준)로 스폰. collision(C==B)은 최소한의 분리로 보정해 스폰 안정화.
+        _pa, _pb, _pc = float(pos_a_m), float(pos_b_m), float(pos_c_m)
+        if abs(_pc - _pb) < 1e-6:
+            _pc = _pb - 0.5
+
+        ab_m = abs(_pa - _pb)
+        bc_m = abs(_pb - _pc)
+        print(
+            f"[shot] spawn abc abs(A,B,C)=({_pa},{_pb},{_pc}) ab={ab_m} bc={bc_m} -> {out_path}",
+            flush=True,
+        )
+        a, b, c = _spawn_abc_absolute_positions(
+            world, carla, pos_a_m=_pa, pos_b_m=_pb, pos_c_m=_pc
+        )
 
         cam, buf = _spawn_camera(world, bp_lib, int(img_w), int(img_h), float(fov))
 
@@ -196,15 +211,15 @@ def main() -> None:
 
     # 카메라: B 중심 + 수직 탑다운(pitch=-90)으로 고정. 이후 샷 간 차이는 ab/bc만으로 표현.
     shots: List[ShotSpec] = [
-        # (filename, ab_m=A-B, bc_m=B-C, cam_z, cam_offset_back, cam_pitch_deg)
-        ("shot1_cruise.png", 30.0, 20.0, None, None, None),  # C:0   B:20  A:50
-        ("shot2_a_brake.png", 20.0, 20.0, None, None, None),  # C:20  B:40  A:60
-        ("shot3_b_brake.png", 20.0, 10.0, None, None, None),  # C:40  B:50  A:70
-        ("shot4_no_device.png", 20.0, 10.0, None, None, None),  # C:50  B:60  A:80
-        ("shot4_with_device.png", 20.0, 15.0, None, None, None),  # C:45  B:60  A:80
-        # collision: bc=0은 스폰이 실패할 수 있어 최소값으로 보정(시각적으로는 거의 겹침)
-        ("shot5_collision.png", 20.0, 4.0, None, None, None),  # C:60  B:60  A:80
-        ("shot5_safe.png", 20.0, 10.0, None, None, None),  # C:50  B:60  A:80
+        # (filename, posA, posB, posC, cam_z, cam_offset_back, cam_pitch_deg)
+        ("shot1_cruise.png", 50.0, 20.0, 0.0, None, None, None),
+        ("shot2_a_brake.png", 60.0, 40.0, 20.0, None, None, None),
+        ("shot3_b_brake.png", 70.0, 50.0, 40.0, None, None, None),
+        ("shot4_no_device.png", 80.0, 60.0, 50.0, None, None, None),
+        ("shot4_with_device.png", 80.0, 60.0, 45.0, None, None, None),
+        # B,C collision (C==B): 내부에서 0.5m만 보정해 스폰 안정화.
+        ("shot5_collision.png", 80.0, 60.0, 60.0, None, None, None),
+        ("shot5_safe.png", 80.0, 60.0, 50.0, None, None, None),
     ]
 
     if bool(args.list_shots):
@@ -243,8 +258,9 @@ def main() -> None:
         ok_count = 0
         for idx, (
             fname,
-            ab_m,
-            bc_m,
+            pos_a_m,
+            pos_b_m,
+            pos_c_m,
             cam_z_override,
             cam_back_override,
             cam_pitch_override,
@@ -258,8 +274,11 @@ def main() -> None:
                 else float(cam_back_override)
             )
             _cp = float(args.cam_pitch) if cam_pitch_override is None else float(cam_pitch_override)
+            ab_m = abs(float(pos_a_m) - float(pos_b_m))
+            bc_m = abs(float(pos_b_m) - float(pos_c_m))
             print(
-                f"[shot_cfg] ab={ab_m} bc={bc_m} cam_z={_cz} cam_back={_cb} cam_pitch={_cp}",
+                f"[shot_cfg] posA={pos_a_m} posB={pos_b_m} posC={pos_c_m} "
+                f"ab={ab_m} bc={bc_m} cam_z={_cz} cam_back={_cb} cam_pitch={_cp}",
                 flush=True,
             )
             ok = _run_one_shot(
@@ -267,8 +286,9 @@ def main() -> None:
                 carla=carla,
                 bp_lib=bp_lib,
                 out_path=out_path,
-                ab_m=float(ab_m),
-                bc_m=float(bc_m),
+                pos_a_m=float(pos_a_m),
+                pos_b_m=float(pos_b_m),
+                pos_c_m=float(pos_c_m),
                 fixed_dt=float(args.fixed_dt),
                 stable_ticks=int(args.stable_ticks),
                 img_w=int(args.img_w),

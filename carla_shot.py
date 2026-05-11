@@ -298,6 +298,77 @@ def _spawn_abc_same_lane(world: Any, carla: Any, ab_m: float, bc_m: float) -> Tu
     return a, b, c
 
 
+def _spawn_abc_absolute_positions(
+    world: Any,
+    carla: Any,
+    *,
+    pos_a_m: float,
+    pos_b_m: float,
+    pos_c_m: float,
+) -> Tuple[Any, Any, Any]:
+    """
+    C=0 기준의 절대 좌표(전방 +m)로 A/B/C를 같은 lane에 스폰한다.
+
+    - 기준점(anchor waypoint)을 먼저 고르고, anchor에서 +pos_m 만큼 전진한 waypoint에 각 차량을 둔다.
+    - pos_*는 모두 '전방' 기준(+m). (음수도 가능하지만 스폰 포인트에 따라 실패할 수 있음)
+    """
+    bp_lib = world.get_blueprint_library()
+    a_bp, b_bp, c_bp = _pick_vehicle_blueprints(bp_lib)
+    _try_set_color(a_bp, (220, 60, 60))  # A red
+    _try_set_color(b_bp, (70, 120, 220))  # B blue
+    _try_set_color(c_bp, (60, 200, 120))  # C green
+
+    max_pos = float(max(pos_a_m, pos_b_m, pos_c_m))
+    anchor = _find_straight_waypoint(world, carla, needed_forward_m=max_pos + 10.0)
+
+    def advance(wp: Any, meters: float) -> Any:
+        step = 2.0
+        cur = wp
+        remain = abs(float(meters))
+        while remain > 1e-6:
+            d = min(step, remain)
+            if meters >= 0:
+                nxts = cur.next(d)
+                if not nxts:
+                    raise RuntimeError("waypoint.next() failed while advancing")
+                cur = nxts[0]
+            else:
+                prevs = cur.previous(d)
+                if not prevs:
+                    raise RuntimeError("waypoint.previous() failed while advancing")
+                cur = prevs[0]
+            remain -= d
+        return cur
+
+    wp_a = advance(anchor, float(pos_a_m))
+    wp_b = advance(anchor, float(pos_b_m))
+    wp_c = advance(anchor, float(pos_c_m))
+
+    def lift(tf: Any, dz: float) -> Any:
+        return carla.Transform(
+            carla.Location(tf.location.x, tf.location.y, tf.location.z + dz), tf.rotation
+        )
+
+    a_tf = lift(wp_a.transform, 0.8)
+    b_tf = lift(wp_b.transform, 0.8)
+    c_tf = lift(wp_c.transform, 0.8)
+
+    b = world.try_spawn_actor(b_bp, b_tf)
+    a = world.try_spawn_actor(a_bp, a_tf)
+    c = world.try_spawn_actor(c_bp, c_tf)
+    if not (a and b and c):
+        for actor in (a, b, c):
+            if actor is not None:
+                try:
+                    actor.destroy()
+                except Exception:
+                    pass
+        raise RuntimeError("spawn failed: could not place A,B,C on same lane (absolute positions)")
+
+    print("[spawn_ok] A,B,C spawned (same lane, absolute)", flush=True)
+    return a, b, c
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--ab-m", type=float, default=30.0)
