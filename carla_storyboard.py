@@ -170,6 +170,19 @@ def main() -> None:
     p.add_argument("--cam-z", type=float, default=20.0)
     p.add_argument("--cam-offset-back", type=float, default=40.0)
     p.add_argument(
+        "--only",
+        default="",
+        help=(
+            "빠른 검증용: 특정 컷만 실행. "
+            "예) --only shot5_collision 또는 --only shot5_collision,shot4_no_device 또는 --only 5"
+        ),
+    )
+    p.add_argument(
+        "--list-shots",
+        action="store_true",
+        help="컷 목록만 출력하고 종료 (빠른 확인용).",
+    )
+    p.add_argument(
         "--cam-pitch",
         type=float,
         default=-55.0,
@@ -197,6 +210,26 @@ def main() -> None:
         ("shot4_with_device.png", 10.0, 14.0, None, None, None),
         ("shot5_safe.png", 12.0, 12.0, None, None, None),
     ]
+
+    if bool(args.list_shots):
+        for idx, (fname, *_rest) in enumerate(shots, start=1):
+            print(f"{idx}: {fname}", flush=True)
+        return
+
+    only_raw = str(args.only or "").strip()
+    if only_raw:
+        tokens = [t.strip() for t in only_raw.split(",") if t.strip()]
+        by_index = {int(t) for t in tokens if t.isdigit()}
+        by_name = {t for t in tokens if not t.isdigit()}
+        filtered: List[ShotSpec] = []
+        for idx, spec in enumerate(shots, start=1):
+            fname = spec[0]
+            stem = os.path.splitext(os.path.basename(fname))[0]
+            if idx in by_index or fname in by_name or stem in by_name:
+                filtered.append(spec)
+        shots = filtered
+        if not shots:
+            raise SystemExit(f"[error] --only matched no shots: {only_raw}")
 
     client = carla.Client(str(args.host), int(args.port))
     client.set_timeout(60.0)

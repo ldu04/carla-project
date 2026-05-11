@@ -1,7 +1,9 @@
 # CARLA: PYTHONPATH에 CARLA egg 경로를 추가하세요 (예: PythonAPI\carla\dist\carla-0.9.15-py3.x-win-amd64.egg)
+# Python 3.7 (CARLA 0.9.13 wheel): numpy>=1.24 는 Python 3.8+ 전용 → 상한 필수
 ultralytics>=8.0.0
 opencv-python>=4.8.0
-numpy>=1.24.0
+numpy>=1.19.0,<1.22.0
 pygame>=2.5.0
 pytest>=7.0.0
 typing_extensions>=4.0.0
+matplotlib==3.5.3
