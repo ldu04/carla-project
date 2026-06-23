@@ -54,6 +54,83 @@
 | `scenario_emergency_brake.py` | 급정거 시나리오 시뮬레이션 |
 | `v2v_logger.py` | 급정거 감지 이벤트 로깅 |
 
+---
+
+## 위험도 분류 로직
+
+### TTC (Time-To-Collision) 기반 3단계 분류
+
+| 등급 | TTC 기준 | UDP 송신 | 경고음 | 테두리 색상 |
+|------|----------|----------|--------|------------|
+| 🔴 CRITICAL | TTC ≤ 2.0s | ✅ 즉시 전송 | 짧고 빠른 반복음 | 빨간색 |
+| 🟠 WARNING | 2.0s < TTC ≤ 4.0s | ✅ 즉시 전송 | 단속적 경고음 | 주황색 |
+| 🟢 SAFE | TTC > 4.0s | — 미전송 | — | — |
+
+최대 4개 경고를 동시 표시하며, 각 경고는 4초간 유지된다.
+
+### 급정거 감지 (EmergencyBrakeDetector)
+
+TTC 기반 판단 외에 두 가지 추가 방법으로 급정거를 조기 감지한다.
+
+| 방법 | 조건 | 설명 |
+|------|------|------|
+| A. TTC 변화율 | dTTC/dt < -2.0 s/s | TTC가 급격히 감소할 때 |
+| B. bbox 면적 증가율 | 연속 프레임 대비 ≥ 15% | 전방 차량이 빠르게 가까워질 때 |
+
+두 조건 중 하나라도 충족되면 `emergency_brake` 패킷을 우선 송신한다.
+쿨다운은 0.25s로, 중복 전송을 방지한다.
+
+---
+
+## 실행 방법
+
+### 환경 요구사항
+
+- Python 3.8+
+- [CARLA 0.9.x](https://carla.org/) (실제 시뮬레이션 모드)
+- YOLOv8 (`ultralytics`)
+
+```bash
+pip install -r requirements.txt
+```
+
+### CARLA 시뮬레이션 모드
+
+```bash
+# 1. CARLA 서버 먼저 실행
+./CarlaUE4.sh   # Linux
+CarlaUE4.exe    # Windows
+
+# 2. 송신측 (대형차) 실행
+set PYTHONPATH=C:\path\to\carla\PythonAPI\carla   # Windows
+export PYTHONPATH=/path/to/carla/PythonAPI/carla  # Linux
+python sender.py
+
+# 3. 수신측 (후방 차량) 실행 — 별도 터미널
+python receiver.py
+```
+
+### 목(Mock) 모드 — CARLA 없이 테스트
+
+```bash
+# 로컬 영상 파일로 YOLO + UDP 파이프라인만 검증
+set V2V_MOCK=1          # Windows
+export V2V_MOCK=1       # Linux/Mac
+python sender.py
+```
+
+### 주요 환경변수
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `CARLA_HOST` | `127.0.0.1` | CARLA 서버 주소 |
+| `V2V_UDP_PORT` | `5005` | UDP 브로드캐스트 포트 |
+| `YOLO_HZ` | `7.0` | YOLO 추론 목표 주파수 (Hz) |
+| `V2V_MOCK` | `0` | `1`로 설정 시 목 모드 실행 |
+| `SCENARIO_V2V` | `1` | `0`으로 설정 시 시스템 미적용 조건 |
+
+---
+
 ## 시뮬레이션 결과
 
 CARLA 기반 가상 주행 환경에서 동일 시나리오를 **100회 반복** 실행하여 도입 전·후를 비교하였다.
@@ -75,3 +152,20 @@ CARLA 기반 가상 주행 환경에서 동일 시나리오를 **100회 반복**
 | 제동 거리 | 56.4 m | 40.3 m | ▼ 28.6% |
 | 반응 시간 | 2.598 s | 0.868 s | ▼ 66.6% |
 | 사고율 | 82 % | 1 % | ▼ 81.0%p |
+
+## 한계 및 향후 발전 방향
+
+### 현재 한계
+
+- **단일 카메라 의존**: 야간·역광·우천 환경에서 YOLO 탐지 정확도 저하
+- **깊이 추정 오차**: Depth 카메라 미장착 환경에서 TTC 계산 정밀도 제한
+- **시뮬레이션 검증만 수행**: 실차 환경에서의 검증 미완료
+- **전방 단일 카메라**: 측방·후방 위험 상황 미감지
+
+### 향후 발전 방향
+
+- [ ] 야간·악천후 환경 대응 → 다양한 환경 데이터로 모델 재학습
+- [ ] 레이더 센서 퓨전으로 단일 카메라 거리 추정 한계 보완
+- [ ] 표준 V2X 프로토콜 (ETSI ITS-G5) 정합
+- [ ] 실차 HUD·내비게이션 연동 및 OEM 연동
+- [ ] 자율주행 시스템과의 연계 → V2X 표준 프로토콜 기반 미래 교통 안전 인프라 편입
